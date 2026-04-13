@@ -2,6 +2,7 @@
 #include "godot_cpp/classes/control.hpp"
 #include "godot_cpp/classes/font.hpp"
 #include "godot_cpp/classes/global_constants.hpp"
+#include "godot_cpp/classes/http_client.hpp"
 #include "godot_cpp/classes/image.hpp"
 #include "godot_cpp/classes/image_texture.hpp"
 #include "godot_cpp/classes/text_line.hpp"
@@ -17,7 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
-
+#include <string_view>
 
 constexpr inline uint32_t HashFnv1a(const char *data, const uint32_t length)
 {
@@ -141,7 +142,7 @@ void DocumentContainer::load_image(const char* src, const char* baseurl, bool re
 		return;
 	}
 	this->m_httpClient.send_get_same_thread(src, [fetchUrl, this](int32_t status, const PackedByteArray& body) {
-        if (status >= HTTPClient::ResponseCode::RESPONSE_BAD_REQUEST) {
+        if (status >= godot::HTTPClient::ResponseCode::RESPONSE_BAD_REQUEST) {
 			std::string tmpStr(reinterpret_cast<const char*>(body.ptr()), body.size());
 	        String bodyStr = tmpStr.c_str();
         	// ERR_PRINT(String("Not able to load image from ") + String(fetchUrl.c_str()) + String(", response: ") + bodyStr);
@@ -303,5 +304,3 @@ void DocumentContainer::get_viewport(litehtml::position& viewport) const {
 void DocumentContainer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_html", "html"), &DocumentContainer::set_html);
 }
-
-
