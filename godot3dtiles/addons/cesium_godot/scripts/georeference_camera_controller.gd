@@ -1,6 +1,12 @@
-@icon("res://addons/cesium_godot/resources/icons/video.svg")
+extends Camera3D
 
-class_name CesiumDynamicCamera extends AbstractCesiumCamera
+class_name GeoreferenceCameraController
+
+@export
+var globe_node : CesiumGeoreference
+
+@export
+var tilesets : Array[Cesium3DTileset]
 
 @export
 var move_speed : float = 100
@@ -12,6 +18,8 @@ var rotation_speed : float = 0.005
 
 var desired_cam_pos : Vector3 = Vector3.ZERO
 
+var loaded : bool
+
 var is_moving_physical : bool = false
 
 var surface_basis: Basis
@@ -21,38 +29,103 @@ var curr_yaw: float
 var curr_pitch: float
 
 var moving_direction: Vector3
+var last_hit_distance: float
 
+@onready
+var post_process_mesh = preload("res://addons/cesium_godot/visuals/post-process.tscn")
 
-func _physics_process(_delta: float) -> void:
-	self.surface_basis = self.calculate_surface_basis()
-	self.update_camera_rotation()
+@export
+var render_atmosphere : bool
+
+var atmosphere_manager: AtmosphereManager
+
+## Equatorial radius (meters) of whichever body globe_node is currently configured for.
+## Defaults to Earth's WGS84 radius until _ready() reads the real value off the georeference.
+var RADII : float = 6378137.0
+const ACCEPTABLE_NEAR_PLANE := 9
+## far / RADII ratio the project has always used for Earth (35358652 / 6378137.0)
+const FAR_PLANE_RADII_MULTIPLIER := 5.543184271
+
+func find_directional_light(node: Node) -> DirectionalLight3D:
+	if node is DirectionalLight3D:
+		return node
+
+	for child in node.get_children():
+		var light = find_directional_light(child)
+		if light:
+			return light
+
+	return null
+
+func _ready() -> void:
+	self.loaded = false
+	self.RADII = self.globe_node.get_ellipsoid_dimensions().x
+
+	if (self.render_atmosphere):
+		self._load_atmosphere()
 	
+	self.near = ACCEPTABLE_NEAR_PLANE
+	if (self.globe_node.origin_type == CesiumGeoreference.OriginType.TrueOrigin):
+		var ecefPos : Vector3 = Vector3(self.globe_node.ecefX, self.globe_node.ecefY, self.globe_node.ecefZ)
+		var enginePos: Vector3 = self.globe_node.get_initial_tx_ecef_to_engine() * ecefPos
+		self.global_position = enginePos + self.globe_node.global_position
+
+
+func _load_atmosphere() -> void:
+	self.atmosphere_manager = AtmosphereManager.new()
+	self.atmosphere_manager.display_atmosphere = true
+	self.atmosphere_manager.globe = self.globe_node
+	var atmosphereNode = self.post_process_mesh.instantiate()
+	self.add_child(atmosphereNode)
+	self.atmosphere_manager.mesh_atmosphere = atmosphereNode
+	self.atmosphere_manager.camera = self
+	self.atmosphere_manager.sun = self.find_directional_light(self.get_tree().current_scene)
+	self.add_child(self.atmosphere_manager)
+
+func _physics_process(delta: float) -> void:
 	self.move_speed = self.adjusted_speed() + self.offset_speed
 	
-	if self.globe_node.origin_type == CesiumGeoreference.OriginType.TrueOrigin:
+	if (self.globe_node.origin_type == CesiumGeoreference.OriginType.TrueOrigin):
 		self.camera_walk_physical(self.moving_direction)
 		self.update_camera_pos_physical()
-	else:
-		var ecefDir : Vector3 = self.globe_node.get_initial_tx_engine_to_ecef() * self.moving_direction
-		camera_walk_ecef(-ecefDir.normalized())
-
+	
+	# Otherwise
+	var ecefDir : Vector3 = self.globe_node.get_initial_tx_engine_to_ecef() * self.moving_direction
+	camera_walk_ecef(-ecefDir.normalized())
 
 func _process(delta: float) -> void:
-	super(delta)
+	self.post_init()
+
+	if (self.render_atmosphere && self.atmosphere_manager == null):
+		self._load_atmosphere()
+	
+	self.surface_basis = self.calculate_surface_basis()
+	handle_input(delta)
+	self.update_camera_rotation()
+	self.adjust_far_and_near()
+	if (self.loaded):
+		self.update_tilesets()
+
+func update_tilesets() -> void:
+	var camera_xform := self.globe_node.get_tx_engine_to_ecef() * self.global_transform
+	for tileset in self.tilesets:
+		if (tileset == null): continue
+		tileset.update_tileset(camera_xform)
+
+func handle_input(delta: float):
 	movement_input(delta)
 
-
+func post_init() -> void:
+	if (!self.loaded):
+		self.loaded = true
+					
+	
 func calculate_surface_basis() -> Basis:
-	var cam_ecef_pos : Vector3
-	if self.globe_node.origin_type == CesiumGeoreference.CartographicOrigin:
-		cam_ecef_pos = Vector3(self.globe_node.ecefX, self.globe_node.ecefY, self.globe_node.ecefZ)
-	else:
-		cam_ecef_pos = self.globe_node.get_tx_engine_to_ecef() * self.global_position
-	
-	var up : Vector3 = self.globe_node.get_normal_at_surface_pos(cam_ecef_pos)
-	
+	var engineToEcefTransform := Vector3(self.globe_node.ecefX, self.globe_node.ecefY, self.globe_node.ecefZ)
+	var up : Vector3 = self.globe_node.get_normal_at_surface_pos(engineToEcefTransform)
 	var reference = -self.global_basis.z
 	
+	var debug_position : Vector3 = self.global_position + (reference * 10)
 	var dotProduct := up.dot(reference)
 	
 	if (dotProduct > 0.99):
@@ -65,7 +138,6 @@ func calculate_surface_basis() -> Basis:
 	var forward := right.cross(up).normalized()
 	var result := Basis(right, up, -forward)
 	return result
-
 
 func movement_input(delta: float):
 	if (Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
@@ -103,9 +175,19 @@ func movement_input(delta: float):
 		
 	self.moving_direction = direction.normalized()
 
+func adjust_move_direction_to_surface(raw_direction: Vector3) -> Vector3:
+	var upEngine : Vector3 = self.surface_basis.y
+	var result : Vector3 = self.global_basis.x * raw_direction.x + self.global_basis.z * raw_direction.z + upEngine * raw_direction.y
+	return result
+
+func update_camera():
+	if (!self.is_moving_physical):
+		return	
+	self.global_position = self.desired_cam_pos
 
 func camera_walk_ecef(direction: Vector3) -> void:
-	if (direction == Vector3.ZERO): return
+	if (direction == Vector3.ZERO):
+		return
 	direction *= -self.move_speed
 	
 	self.globe_node.ecefX += direction.x
@@ -114,22 +196,27 @@ func camera_walk_ecef(direction: Vector3) -> void:
 
 
 func camera_walk_physical(direction: Vector3) -> void:
-	if desired_cam_pos == Vector3.ZERO:
+	if (desired_cam_pos == Vector3.ZERO):
 		# Pretty much delete this I guess
 		self.desired_cam_pos = self.global_position + direction * self.move_speed
 
 	self.desired_cam_pos += direction * self.move_speed
 	self.is_moving_physical = direction != Vector3.ZERO
 
-
 func update_camera_pos_physical() -> void:
-	if self.is_moving_physical:
-		self.global_position = self.desired_cam_pos
+	if (!self.is_moving_physical): return
+	self.global_position = self.desired_cam_pos
 
+func adjust_far_and_near() -> void:
+	self.far = self.RADII * FAR_PLANE_RADII_MULTIPLIER
 
 func update_camera_rotation() -> void:
+	# Store original basis axes before any rotations
+	var y_axis = self.surface_basis.y.normalized()
+	var x_axis = self.surface_basis.x.normalized()
+
 	# Apply yaw first around original Y axis
-	var moddedBasis: Basis = self.surface_basis.rotated(self.surface_basis.y.normalized(), -curr_yaw)
+	var moddedBasis: Basis = self.surface_basis.rotated(y_axis, -curr_yaw)
 	# Apply pitch around original X axis (now rotated by yaw)
 	# Using the updated X axis from the basis after yaw rotation
 	moddedBasis = moddedBasis.rotated(moddedBasis.x, curr_pitch)
@@ -138,6 +225,7 @@ func update_camera_rotation() -> void:
 	self.basis = moddedBasis
 	self.curr_yaw = 0
 
+	
 
 func rotate_camera(delta_pitch: float, delta_yaw: float) -> void:
 	# Apply yaw rotation (unchanged)
@@ -155,9 +243,8 @@ func rotate_camera(delta_pitch: float, delta_yaw: float) -> void:
 
 	# Determine sign using the cross product's direction relative to the camera's right vector
 	var camera_right = self.global_basis.x.normalized()
-	
-	# dot product: Positive = above surface, Negative = below
-	var signed_angle = unsigned_angle * sign(cross.dot(camera_right)) 
+	var sign = cross.dot(camera_right)  # Positive = above surface, Negative = below
+	var signed_angle = unsigned_angle * sign(sign)
 
 	# Clamp the pitch based on the signed angle
 	var desired_pitch = self.curr_pitch + delta_pitch
@@ -168,17 +255,16 @@ func rotate_camera(delta_pitch: float, delta_yaw: float) -> void:
 	if (signed_angle < 110 && signed_angle > 0 && delta_pitch < 0):
 		return
 	self.curr_pitch = desired_pitch
-
+		
+	
+	
 
 func _get_surface_distance_raycast() -> float:
 	var space_state = get_world_3d().direct_space_state
 
 	var ray_query = PhysicsRayQueryParameters3D.new()
 	ray_query.from = global_position
-	if self.globe_node.origin_type == CesiumGeoreference.CartographicOrigin:
-		ray_query.to = global_position + (-surface_basis.y * RADII * 2)
-	else:
-		ray_query.to = self.globe_node.global_position
+	ray_query.to = global_position + (-surface_basis.y * RADII * 2)
 	ray_query.hit_from_inside = true
 	ray_query.hit_back_faces = true
 	ray_query.exclude = [self]
@@ -209,7 +295,6 @@ func _get_surface_distance_raycast() -> float:
 		closest_distance = distanceToMove
 
 	return closest_distance
-
 
 func adjusted_speed() -> float:
 	# The speed has to go through the curve

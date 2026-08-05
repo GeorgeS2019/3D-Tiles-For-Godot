@@ -46,12 +46,6 @@ void vertex() {
 
 	// View vector in world space
 	viewVector = (INV_PROJECTION_MATRIX * vec4(UV * 2.0 - 1.0, 0.0, 1.0)).xyz;
-
-	// some people have reported inverted columns in the view matrix on double precision builds
-	//mat4 ivm = INV_VIEW_MATRIX;
-	//ivm[3].xyz *= -1.0;
-	//viewVector = (ivm * vec4(viewVector, 0.0)).xyz;
-
 	viewVector = (INV_VIEW_MATRIX * vec4(viewVector, 0.0)).xyz;
 }
 
@@ -98,7 +92,7 @@ float opticalDepthBaked2(vec3 rayOrigin, vec3 rayDir, float rayLength) {
 }
 
 vec3 calculateLight(
-	vec3 worldPos, vec3 rayOrigin, vec3 rayDir, float rayLength, vec3 originalCol, vec2 uv
+	vec3 rayOrigin, vec3 rayDir, float rayLength, vec3 originalCol, vec2 uv
 ) {
 	float blueNoise = textureLod(BlueNoise, squareUV(uv) * DitherScale, 0.0).r;
 	blueNoise = (blueNoise - 0.5) * DitherStrength;
@@ -128,8 +122,7 @@ vec3 calculateLight(
 		inScatterPoint += rayDir * stepSize;
 	}
 
-	float altitude_modulation = 10.0*smoothstep(0.9, 1.0, PlanetRadius/length(worldPos))+1.0;
-	inScatteredLight *= ScatteringCoefficients * Intensity * stepSize / PlanetRadius * altitude_modulation;
+	inScatteredLight *= ScatteringCoefficients * Intensity * stepSize / PlanetRadius;
 	inScatteredLight += blueNoise * 0.01;
 
 	// Attenuate brightness of original col (i.e light reflected from planet surfaces)
@@ -137,7 +130,7 @@ vec3 calculateLight(
 	const float brightnessAdaptionStrength = 0.15;
 	const float reflectedLightOutScatterStrength = 3.0;
 	float brightnessAdaption = dot(inScatteredLight,vec3(1)) * brightnessAdaptionStrength;
-	float brightnessSum = viewRayOpticalDepth * Intensity * reflectedLightOutScatterStrength  + brightnessAdaption;
+	float brightnessSum = viewRayOpticalDepth * Intensity * reflectedLightOutScatterStrength + brightnessAdaption;
 	float reflectedLightStrength = exp(-brightnessSum);
 	float hdrStrength = saturate(dot(originalCol,vec3(1))/3.0-1.0);
 	reflectedLightStrength = mix(reflectedLightStrength, 1.0, hdrStrength);
@@ -183,7 +176,6 @@ void fragment() {
 		vec3 pointInAtmosphere = rayPos + rayDir * (dstToAtmosphere + epsilon);
 
 		vec3 light = calculateLight(
-			rayPos,
 			pointInAtmosphere,
 			rayDir,
 			dstThroughAtmosphere - epsilon * 2.0,
@@ -194,8 +186,7 @@ void fragment() {
 	}
 	ALPHA = finalCol.a * AlphaValue;
 	ALBEDO = finalCol.rgb;
-	//ALBEDO = vec3(dot(rayPos + rayDir * (dstToAtmosphere), DirToSun) / PlanetRadius) * dstThroughAtmosphere;
 
-	//float dbg = -dot(rayPos, rayDir);
+	float dbg = -dot(rayPos, rayDir);
 	//ALBEDO = vec3(dstThroughAtmosphere);
 }
