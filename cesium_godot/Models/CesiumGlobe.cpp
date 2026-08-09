@@ -16,17 +16,9 @@
 
 
 #include "CesiumGeospatial/Ellipsoid.h"
+#include "CesiumGeospatial/Cartographic.h"
 #include "../Utils/CesiumMathUtils.h"
-
-
-// Use WSG84, cesium stopped makig that ellipsoid a constexpr, so we'll hardcode it here
-constexpr double WGS84_RADIUS = 6378137.0;
-
-constexpr double WGS84_B = 6.3567523E6;
-constexpr double WGS84_BSQR = WGS84_B * WGS84_B;
-constexpr double WGS84_R_SQR = WGS84_RADIUS * WGS84_RADIUS;
-constexpr double WGS84_E_PRIME_SQR = (WGS84_R_SQR - WGS84_BSQR) / WGS84_BSQR;	
-constexpr double WGS84_E_SQR = (WGS84_R_SQR - WGS84_BSQR) / WGS84_R_SQR;
+#include <optional>
 
 Transform3D CesiumGeoreference::get_tx_engine_to_ecef() const
 {
@@ -81,7 +73,16 @@ Vector3 CesiumGeoreference::get_mouse_pos_ecef()
 
 Vector3 CesiumGeoreference::get_ellipsoid_dimensions() const
 {
-	return CesiumMathUtils::from_glm_vec3(CesiumGeospatial::Ellipsoid::WGS84.getRadii());
+	return CesiumMathUtils::from_glm_vec3(this->m_ellipsoid.getRadii());
+}
+
+void CesiumGeoreference::set_ellipsoid_radii(const Vector3& radii)
+{
+	real_t equatorial = radii.x;
+	if (!Math::is_equal_approx(radii.x, radii.y)) {
+		WARN_PRINT("CesiumGeoreference: ellipsoid_radii.x and .y should be equal (an ellipsoid of revolution, like every real planet/moon) -- using x for both.");
+	}
+	this->m_ellipsoid = CesiumGeospatial::Ellipsoid(equatorial, equatorial, radii.z);
 }
 
 int CesiumGeoreference::get_origin_type() const {
@@ -178,112 +179,54 @@ double CesiumGeoreference::get_altitude() const {
 	return this->get_lla().z;
 }
 
-/// @brief All calculations are based off of https://en.wikipedia.org/wiki/Geographic_coordinate_conversion
-/// using Ferrari's method to avoid iterations with Newton's method and all that stuff
+/// @brief lat/lon/height <-> ECEF conversion, general for whatever ellipsoid
+/// is currently configured (see set_ellipsoid_radii()) via cesium-native's
+/// own CesiumGeospatial::Ellipsoid math rather than hand-rolled per-Earth
+/// formulas. Unit conventions (deg vs. rad per function) are preserved
+/// exactly as they were before this used the shared Ellipsoid — GDScript
+/// callers depend on them.
 glm::dvec3 CesiumGeoreference::get_lla() const {
-	// Take ECEF and represent it as lla
-	const double& x = this->m_ecefPosition.x;
-	const double& y = this->m_ecefPosition.y;
-	const double& z = this->m_ecefPosition.z;
-
-	
-	double p = Math::sqrt((x * x) + (y * y));
-	double theta = Math::atan2(WGS84_RADIUS * z, WGS84_B * p);	
-
-	double longitude = Math::atan2(y, x);
-
-	// This was a tough one
-	double lat = Math::atan2( (z + WGS84_E_PRIME_SQR * WGS84_B * Math::pow(Math::sin(theta), 3)), (p - WGS84_E_SQR * WGS84_RADIUS * Math::pow(Math::cos(theta), 3)));
-	double N = WGS84_RADIUS / (Math::sqrt(1 - (WGS84_E_SQR * Math::pow(Math::sin(lat), 2))));
-	double m = (p / Math::cos(lat));
-  
-	double alt = m - N;
-	return glm::dvec3(Math::rad_to_deg(lat), Math::rad_to_deg(longitude), alt);
+	std::optional<CesiumGeospatial::Cartographic> carto = this->m_ellipsoid.cartesianToCartographic(this->m_ecefPosition);
+	if (!carto.has_value()) {
+		return glm::dvec3(0.0, 0.0, 0.0);
+	}
+	return glm::dvec3(Math::rad_to_deg(carto->latitude), Math::rad_to_deg(carto->longitude), carto->height);
 }
 
 
 Vector3 CesiumGeoreference::ecef_to_lat_lon_alt_rad(const EcefVector3& ecef) const {
-	const double x = ecef.x;
-	const double y = ecef.y;
-	const double z = ecef.z;
-
-	
-	double p = Math::sqrt((x * x) + (y * y));
-	double theta = Math::atan2(WGS84_RADIUS * z, WGS84_B * p);	
-
-	double longitude = Math::atan2(y, x);
-
-	// This was a tough one
-	double lat = Math::atan2( (z + WGS84_E_PRIME_SQR * WGS84_B * Math::pow(Math::sin(theta), 3)), (p - WGS84_E_SQR * WGS84_RADIUS * Math::pow(Math::cos(theta), 3)));
-	double N = WGS84_RADIUS / (Math::sqrt(1 - (WGS84_E_SQR * Math::pow(Math::sin(lat), 2))));
-	double m = (p / Math::cos(lat));
-  
-	double alt = m - N;
-	return Vector3(lat, longitude, alt);
+	std::optional<CesiumGeospatial::Cartographic> carto = this->m_ellipsoid.cartesianToCartographic(CesiumMathUtils::to_glm_dvec3(ecef));
+	if (!carto.has_value()) {
+		return Vector3(0.0, 0.0, 0.0);
+	}
+	return Vector3(carto->latitude, carto->longitude, carto->height);
 }
 
 
-Vector3 CesiumGeoreference::ecef_to_lat_lon_alt_deg(const EcefVector3& ecef) const 
+Vector3 CesiumGeoreference::ecef_to_lat_lon_alt_deg(const EcefVector3& ecef) const
 {
-	const double x = ecef.x;
-	const double y = ecef.y;
-	const double z = ecef.z;
-
-	
-	double p = Math::sqrt((x * x) + (y * y));
-	double theta = Math::atan2(WGS84_RADIUS * z, WGS84_B * p);	
-
-	double longitude = Math::atan2(y, x);
-
-	// This was a tough one
-	double lat = Math::atan2( (z + WGS84_E_PRIME_SQR * WGS84_B * Math::pow(Math::sin(theta), 3)), (p - WGS84_E_SQR * WGS84_RADIUS * Math::pow(Math::cos(theta), 3)));
-	double N = WGS84_RADIUS / (Math::sqrt(1 - (WGS84_E_SQR * Math::pow(Math::sin(lat), 2))));
-	double m = (p / Math::cos(lat));
-  
-	double alt = m - N;
-	return Vector3(Math::rad_to_deg(lat), Math::rad_to_deg(longitude), alt);
+	std::optional<CesiumGeospatial::Cartographic> carto = this->m_ellipsoid.cartesianToCartographic(CesiumMathUtils::to_glm_dvec3(ecef));
+	if (!carto.has_value()) {
+		return Vector3(0.0, 0.0, 0.0);
+	}
+	return Vector3(Math::rad_to_deg(carto->latitude), Math::rad_to_deg(carto->longitude), carto->height);
 }
 
 EcefVector3 CesiumGeoreference::lat_lon_alt_rad_to_ecef(const Vector3& lla) const {
-	const double lat = lla.x;
-	const double lon = lla.y;
-	const double alt = lla.z;
-
-	double clat = cos(lat);
-	double slat = sin(lat);
-	double clon = cos(lon);
-	double slon = sin(lon);	
-
-	double N = WGS84_RADIUS / sqrt(1.0 - WGS84_E_SQR * slat * slat);
-
-	Vector3 res{};
-	res.x = (N + alt) * clat * clon;
-	res.y = (N + alt) * clat * slon;
-	res.z = (N * (1 - WGS84_E_SQR) + alt) * slat;
-	return res;
+	// lla.x = latitude (rad), lla.y = longitude (rad), lla.z = height (m);
+	// Cartographic's constructor takes (longitude, latitude, height).
+	CesiumGeospatial::Cartographic carto(lla.y, lla.x, lla.z);
+	return CesiumMathUtils::from_glm_vec3(this->m_ellipsoid.cartographicToCartesian(carto));
 }
 
 void CesiumGeoreference::register_tileset_to_move_origin(Cesium3DTileset* tileset) {
 	this->m_trackedTilesets.emplace_back(tileset);
 }
 
-/// @brief Approximation solution from Apple's pARk
-/// https://developer.apple.com/library/archive/samplecode/pARk/Introduction/Intro.html
 void CesiumGeoreference::update_ecef_with_lla(glm::dvec3 lla) {
-	const double& lat = lla.x;
-	const double& lon = lla.y;
-	const double& alt = lla.z;
-
-	double clat = cos(Math::deg_to_rad(lat));
-	double slat = sin(Math::deg_to_rad(lat));
-	double clon = cos(Math::deg_to_rad(lon));
-	double slon = sin(Math::deg_to_rad(lon));	
-
-	double N = WGS84_RADIUS / sqrt(1.0 - WGS84_E_SQR * slat * slat);
-
-	this->m_ecefPosition.x = (N + alt) * clat * clon;
-	this->m_ecefPosition.y = (N + alt) * clat * slon;
-	this->m_ecefPosition.z = (N * (1 - WGS84_E_SQR) + alt) * slat;
+	// lla.x = latitude (deg), lla.y = longitude (deg), lla.z = height (m)
+	CesiumGeospatial::Cartographic carto = CesiumGeospatial::Cartographic::fromDegrees(lla.y, lla.x, lla.z);
+	this->m_ecefPosition = this->m_ellipsoid.cartographicToCartesian(carto);
 }
 
 
@@ -331,8 +274,7 @@ Basis CesiumGeoreference::eus_at_ecef(const EcefVector3& ecef) const
 
 Vector3 CesiumGeoreference::get_normal_at_surface_pos(const EcefVector3& ecef) const
 {
-	const CesiumGeospatial::Ellipsoid& wgs84 = CesiumGeospatial::Ellipsoid::WGS84;
-	glm::dvec3 surfaceNormal = wgs84.geodeticSurfaceNormal(CesiumMathUtils::to_glm_dvec3(ecef));
+	glm::dvec3 surfaceNormal = this->m_ellipsoid.geodeticSurfaceNormal(CesiumMathUtils::to_glm_dvec3(ecef));
 	Vector3 gdNormal = CesiumMathUtils::from_glm_vec3(surfaceNormal);
 	gdNormal = this->get_initial_tx_ecef_to_engine().xform(gdNormal);
 	return gdNormal;
@@ -371,6 +313,8 @@ void CesiumGeoreference::_bind_methods()
 	ClassDB::bind_method(D_METHOD("get_mouse_pos_ecef"), &CesiumGeoreference::get_mouse_pos_ecef);
 	ClassDB::bind_method(D_METHOD("ray_to_surface", "origin", "direction"), &CesiumGeoreference::ray_to_surface);
 	ClassDB::bind_method(D_METHOD("get_ellipsoid_dimensions"), &CesiumGeoreference::get_ellipsoid_dimensions);
+	ClassDB::bind_method(D_METHOD("set_ellipsoid_radii", "radii"), &CesiumGeoreference::set_ellipsoid_radii);
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "ellipsoid_radii"), "set_ellipsoid_radii", "get_ellipsoid_dimensions");
 	ClassDB::bind_method(D_METHOD("get_normal_at_surface_pos"), &CesiumGeoreference::get_normal_at_surface_pos);
 
 

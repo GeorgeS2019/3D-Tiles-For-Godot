@@ -14,6 +14,7 @@ using namespace godot;
 #endif
 
 #include <glm/ext/vector_double3.hpp>
+#include "CesiumGeospatial/Ellipsoid.h"
 
 /// @brief small typedef for clarity
 using EcefVector3 = Vector3;
@@ -43,6 +44,15 @@ public:
 	Vector3 get_mouse_pos_ecef();
 
 	Vector3 get_ellipsoid_dimensions() const;
+
+	/// @brief Configures the ellipsoid this georeference represents — Earth
+	/// (WGS84, the default) or any other body. radii.x and radii.y should be
+	/// equal (an ellipsoid of revolution, like every real planet/moon); if
+	/// they differ, x wins and a warning is printed. All geodetic math
+	/// (get_lla, ecef_to_lat_lon_alt_*, lat_lon_alt_rad_to_ecef,
+	/// update_ecef_with_lla, get_normal_at_surface_pos, get_ellipsoid_dimensions)
+	/// uses whatever ellipsoid is currently configured.
+	void set_ellipsoid_radii(const Vector3& radii);
 
 	Vector3 ray_to_surface(const Vector3& origin, const Vector3& direction) const;
 
@@ -112,7 +122,11 @@ private:
 	EcefVector3 trace_ray_to_ellipsoid(const EcefVector3& origin, const EcefVector3& rayDirection) const;
 
 	Transform3D m_initialOriginTransform{};
-	
+
+	/// @brief Which body this georeference represents — defaults to Earth
+	/// (WGS84). See set_ellipsoid_radii().
+	CesiumGeospatial::Ellipsoid m_ellipsoid = CesiumGeospatial::Ellipsoid::WGS84;
+
 	glm::dvec3 m_ecefPosition{ -1292940.0, -4740030.0, 4056960.0 };
 	
 	glm::dvec3 m_originalEcefPosition;
