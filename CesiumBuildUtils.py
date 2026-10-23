@@ -4,6 +4,7 @@ import os
 import fnmatch
 import shutil
 import sys
+import platform
 
 from SCons.Script import Dir
 
@@ -33,6 +34,24 @@ STATIC_TRIPLET = "x64-windows-static"
 RELEASE_CONFIG = "Release"
 
 ezvcpkgFoundPath: str = ""
+macosArchitecture = None
+LITEHTML_COMMIT = "35ecd69d05e72b0148204a576db62c2148084193"
+
+
+def get_macos_architecture(arch=None):
+    architecture = arch or macosArchitecture or platform.machine().lower()
+    if architecture not in ("x86_64", "arm64"):
+        raise ValueError(
+            f"Unsupported macOS architecture: {architecture}. Use arch=x86_64 or arch=arm64; universal builds are not supported."
+        )
+    return architecture
+
+
+def configure_macos_architecture(arguments):
+    """Use one architecture for godot-cpp, Cesium Native, vcpkg and litehtml."""
+    global macosArchitecture
+    macosArchitecture = get_macos_architecture(arguments.get("arch"))
+    arguments["arch"] = macosArchitecture
 
 
 def get_compile_flags():
@@ -149,58 +168,55 @@ def clone_bindings_repo_if_needed():
 
 
 def clone_lite_html_if_needed():
-    # clone_repo_if_needed(ROOT_DIR_EXT + "/third_party/lite-html", "Lite HTML",
-    #                      "https://github.com/litehtml/litehtml.git", "v0.9", "6ca1ab0419e770e6d35a1ef690238773a1dafcee")
-    pass
+    if sys.platform != PLATFORM_MACOS:
+        return
+    source_dir = scons_to_abs_path(get_root_dir() + "/third_party/litehtml-src")
+    if not os.path.exists(source_dir):
+        subprocess.run(["git", "clone", "https://github.com/litehtml/litehtml.git", source_dir], check=True)
+        subprocess.run(["git", "checkout", "--detach", LITEHTML_COMMIT], cwd=source_dir, check=True)
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_dir, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    if revision != LITEHTML_COMMIT:
+        raise ValueError(f"litehtml source must be at {LITEHTML_COMMIT}, found {revision}")
 
 
-def build_litehtml(arch="arm64"):
+def build_litehtml(arch=None):
     """Build litehtml from source for the given architecture."""
-    third_party_dir = scons_to_abs_path(ROOT_DIR_EXT + "/third_party")
+    arch = get_macos_architecture(arch)
+    third_party_dir = scons_to_abs_path(get_root_dir() + "/third_party")
     source_dir = os.path.join(third_party_dir, "litehtml-src")
-    output_dir = os.path.join(third_party_dir, "litehtml", "macos")
+    output_dir = os.path.join(third_party_dir, "litehtml", "macos", arch)
 
     # Check if already built
-    if os.path.exists(os.path.join(output_dir, "liblitehtml.a")):
+    if all(os.path.isfile(os.path.join(output_dir, library)) for library in ("liblitehtml.a", "libgumbo.a")):
         print("litehtml already built for macOS, skipping...")
         return
 
     if not os.path.exists(source_dir):
-        print("litehtml source not found at %s" % source_dir, file=sys.stderr)
-        return
+        raise FileNotFoundError(f"litehtml source not found at {source_dir}")
 
     print("Building litehtml from source for macOS...")
 
-    build_dir = os.path.join(source_dir, "build-macos")
+    build_dir = os.path.join(source_dir, f"build-macos-{arch}")
     os.makedirs(build_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    prev_dir = os.getcwd()
-    os.chdir(build_dir)
-
     # Configure with CMake
-    result = subprocess.run([
+    subprocess.run([
         "cmake",
         "-DCMAKE_BUILD_TYPE=Release",
         f"-DCMAKE_OSX_ARCHITECTURES={arch}",
         "-DLITEHTML_BUILD_TESTING=OFF",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
         ".."
-    ])
-
-    if result.returncode != 0:
-        print("Failed to configure litehtml", file=sys.stderr)
-        os.chdir(prev_dir)
-        return
+    ], cwd=build_dir, check=True)
 
     # Build
-    result = subprocess.run(["cmake", "--build", ".", "--config", "Release"])
-
-    if result.returncode != 0:
-        print("Failed to build litehtml", file=sys.stderr)
-        os.chdir(prev_dir)
-        return
+    subprocess.run(["cmake", "--build", ".", "--config", "Release"], cwd=build_dir, check=True)
 
     # Copy output libraries
+    built_libraries = []
     for lib in ["liblitehtml.a", "libgumbo.a"]:
         src = os.path.join(build_dir, lib)
         if not os.path.exists(src):
@@ -209,11 +225,12 @@ def build_litehtml(arch="arm64"):
                 if lib in files:
                     src = os.path.join(root, lib)
                     break
-        if os.path.exists(src):
-            shutil.copy2(src, output_dir)
-            print(f"Copied {lib} to {output_dir}")
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"litehtml build did not produce {lib} in {build_dir}")
+        built_libraries.append(src)
 
-    os.chdir(prev_dir)
+    for src in built_libraries:
+        shutil.copy2(src, output_dir)
     print("litehtml build complete!")
 
 
@@ -225,7 +242,8 @@ def clone_repo_if_needed(
     if os.path.exists(repoDirectory):
         return
     subprocess.run(
-        ["git", "clone", "--depth=1", "-b", branch, repoUrl, "--recursive", repoDirectory]
+        ["git", "clone", "--depth=1", "-b", branch, repoUrl, "--recursive", repoDirectory],
+        check=True,
     )
 
     # Shouldn't we just rely on the repo tags?
@@ -241,7 +259,7 @@ def configure_native(argumentsDict):
     isExt = is_extension_target(argumentsDict)
     repoDirectory = CESIUM_NATIVE_DIR_EXT if isExt else CESIUM_NATIVE_DIR_MODULE
     repoDirectory = scons_to_abs_path(repoDirectory)
-    os.chdir(repoDirectory)
+    buildDirectory = get_native_build_dir()
     # Assume you already have the triplet (for now)
     triplet: str = determine_triplet()
     os.environ["VCPKG_TRIPLET"] = triplet
@@ -254,8 +272,9 @@ def configure_native(argumentsDict):
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
             "-DGIT_LFS_SKIP_SMUDGE=1",
             "-DVCPKG_TRIPLET=%s" % triplet,
-            ".",
-        ]
+            "-S", repoDirectory,
+            "-B", buildDirectory,
+        ] + ([f"-DCMAKE_OSX_ARCHITECTURES={get_macos_architecture()}"] if sys.platform == PLATFORM_MACOS else [])
     )
 
     # We pray this works haha
@@ -269,11 +288,11 @@ def configure_native(argumentsDict):
     print("Configuration completed without any errors!")
 
 
-def determine_triplet():
+def determine_triplet(arch=None):
     if os.name == OS_WIN:
         return "x64-windows-static"
     if sys.platform == PLATFORM_MACOS:
-        return "arm64-osx"
+        return {"x86_64": "x64-osx", "arm64": "arm64-osx"}[get_macos_architecture(arch)]
     if os.name == OS_LINUX:
         return "x64-linux"
 
@@ -310,18 +329,18 @@ def compile_native(argumentsDict):
             "Compiling for platform %s is not yet supported!" % os.name, file=sys.stderr
         )
     if result.returncode != 0:
-        print("Error building Cesium Native: %s" % str(result.stderr))
+        raise subprocess.CalledProcessError(result.returncode, result.args)
     print("Cleaning definitions on generated files...")
     clean_cesium_definitions()
     print("Finished building Cesium Native!")
 
 
 def build_native_linux():
-    return subprocess.run(["cmake", "--build", "."])
+    return subprocess.run(["cmake", "--build", get_native_build_dir()])
 
 
 def build_native_macos():
-    return subprocess.run(["cmake", "--build", "."])
+    return subprocess.run(["cmake", "--build", get_native_build_dir()])
 
 
 def build_native_win():
@@ -336,7 +355,7 @@ def build_native_win():
         )
         return
     releaseConfig = "/property:Configuration=%s" % buildConfig
-    return subprocess.run([msbuildPath, solutionName, releaseConfig])
+    return subprocess.run([msbuildPath, solutionName, releaseConfig], cwd=get_native_build_dir())
 
 
 def clean_cesium_definitions():
@@ -373,10 +392,10 @@ def install_additional_libs():
     vcpkgPath = find_ezvcpkg_path()
     execExtension = ".exe" if os.name == OS_WIN else ""
     executable = "%s/%s" % (vcpkgPath, "vcpkg" + execExtension)
-    subprocess.run([executable, "install", "uriparser:%s" % (determine_triplet())])
-    subprocess.run([executable, "install", "ada-url:%s" % (determine_triplet())])
+    subprocess.run([executable, "install", "uriparser:%s" % (determine_triplet())], check=True)
+    subprocess.run([executable, "install", "ada-url:%s" % (determine_triplet())], check=True)
     if os.name == OS_WIN:
-        subprocess.run([executable, "install", "curl:%s" % (determine_triplet())])
+        subprocess.run([executable, "install", "curl:%s" % (determine_triplet())], check=True)
 
 
 def find_ms_build() -> str:
@@ -477,3 +496,10 @@ def get_root_dir() -> str:
 
 def get_root_dir_native() -> str:
     return scons_to_abs_path(currentRootDir + "/native")
+
+
+def get_native_build_dir() -> str:
+    source_dir = get_root_dir_native()
+    if sys.platform == PLATFORM_MACOS:
+        return os.path.join(source_dir, f"build-macos-{get_macos_architecture()}")
+    return source_dir

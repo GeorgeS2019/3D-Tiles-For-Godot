@@ -45,3 +45,9 @@ godot3dtiles/**/*.import
 *.vcxproj
 *.vcxproj.filters
 *.dblite
+
+# macOS dependency source and architecture-specific build outputs
+.venv/
+cesium_godot/third_party/litehtml-src/
+cesium_godot/third_party/litehtml/macos/arm64/
+cesium_godot/third_party/litehtml/macos/x86_64/

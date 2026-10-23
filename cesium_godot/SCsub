@@ -99,7 +99,7 @@ env.Append(CPPPATH=includePaths)
 vcpkgLibPath = cesium_build_utils.find_ezvcpkg_lib_path()
 env.Prepend(LIBPATH=vcpkgLibPath)
 
-root_dir_native = cesium_build_utils.get_root_dir_native()
+root_dir_native = cesium_build_utils.get_native_build_dir()
 current_build_config = ""
 if (os.name  == cesium_build_utils.OS_WIN):
     current_build_config = cesium_build_utils.RELEASE_CONFIG
@@ -340,7 +340,7 @@ elif sys.platform == cesium_build_utils.PLATFORM_MACOS:
         "absl_vlog_config_internal"
     ])
     # Add macOS-specific library path for litehtml
-    litehtml_macos_path = cesium_build_utils.get_root_dir() + "/third_party/litehtml/macos"
+    litehtml_macos_path = cesium_build_utils.get_root_dir() + "/third_party/litehtml/macos/" + cesium_build_utils.get_macos_architecture()
     litehtml_macos_abs = cesium_build_utils.scons_to_abs_path(litehtml_macos_path)
     env.Append(LIBPATH=[litehtml_macos_path])
     # Link against macOS frameworks and force-load litehtml to resolve internal dependencies
@@ -377,9 +377,9 @@ common_libpaths = [
     f"{root_dir_native}/CesiumGltfContent/{current_build_config}",
     f"{root_dir_native}/CesiumQuantizedMeshTerrain/{current_build_config}",
     f"{root_dir_native}/Cesium3DTilesContent/{current_build_config}",
-    cesium_build_utils.get_root_dir_native() + "/libs/gsl",
-    cesium_build_utils.get_root_dir_native() + "/libs/absl",
-    cesium_build_utils.get_root_dir_native() + "/libs",
+    root_dir_native + "/libs/gsl",
+    root_dir_native + "/libs/absl",
+    root_dir_native + "/libs",
     cesium_build_utils.find_ezvcpkg_path(
     ) + "/installed/%s/lib" % (cesium_build_utils.determine_triplet())
 ]
