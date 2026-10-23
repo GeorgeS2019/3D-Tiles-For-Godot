@@ -79,12 +79,6 @@ After updating an existing macOS checkout, run `buildCesium=yes` once to
 populate the new architecture-specific build directory before using
 `buildCesium=no`.
 
-Build-script regression tests:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
 ## Wiring into a Godot project
 
 1. Copy `godot3dtiles/addons/cesium_godot` into your project's `addons/`.

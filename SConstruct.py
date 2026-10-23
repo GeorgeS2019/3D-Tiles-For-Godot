@@ -15,7 +15,7 @@ def add_source_files(self, p_sources):
 
 # Clone all the needed projects
 if sys.platform == cesium_build_utils.PLATFORM_MACOS:
-    cesium_build_utils.configure_macos_architecture(ARGUMENTS)
+    ARGUMENTS["arch"] = cesium_build_utils.get_macos_architecture()
 
 if (cesium_build_utils.is_extension_target(ARGUMENTS)):
     cesium_build_utils.clone_bindings_repo_if_needed()
@@ -27,7 +27,7 @@ cesium_build_utils.compile_native(ARGUMENTS)
 
 # Build litehtml from source on macOS (no pre-built binaries available)
 if sys.platform == cesium_build_utils.PLATFORM_MACOS:
-    cesium_build_utils.build_litehtml(ARGUMENTS["arch"])
+    cesium_build_utils.build_litehtml()
 
 env = SConscript("godot-cpp/SConstruct")
 cesium_build_utils.generate_precision_symbols(ARGUMENTS, env)

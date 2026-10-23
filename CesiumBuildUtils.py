@@ -6,7 +6,7 @@ import shutil
 import sys
 import platform
 
-from SCons.Script import Dir
+from SCons.Script import ARGUMENTS, Dir
 
 ROOT_DIR_MODULE = "#modules/cesium_godot"
 
@@ -34,24 +34,16 @@ STATIC_TRIPLET = "x64-windows-static"
 RELEASE_CONFIG = "Release"
 
 ezvcpkgFoundPath: str = ""
-macosArchitecture = None
 LITEHTML_COMMIT = "35ecd69d05e72b0148204a576db62c2148084193"
 
 
 def get_macos_architecture(arch=None):
-    architecture = arch or macosArchitecture or platform.machine().lower()
+    architecture = arch or ARGUMENTS.get("arch", platform.machine().lower())
     if architecture not in ("x86_64", "arm64"):
         raise ValueError(
             f"Unsupported macOS architecture: {architecture}. Use arch=x86_64 or arch=arm64; universal builds are not supported."
         )
     return architecture
-
-
-def configure_macos_architecture(arguments):
-    """Use one architecture for godot-cpp, Cesium Native, vcpkg and litehtml."""
-    global macosArchitecture
-    macosArchitecture = get_macos_architecture(arguments.get("arch"))
-    arguments["arch"] = macosArchitecture
 
 
 def get_compile_flags():
@@ -242,8 +234,7 @@ def clone_repo_if_needed(
     if os.path.exists(repoDirectory):
         return
     subprocess.run(
-        ["git", "clone", "--depth=1", "-b", branch, repoUrl, "--recursive", repoDirectory],
-        check=True,
+        ["git", "clone", "--depth=1", "-b", branch, repoUrl, "--recursive", repoDirectory]
     )
 
     # Shouldn't we just rely on the repo tags?
@@ -259,7 +250,6 @@ def configure_native(argumentsDict):
     isExt = is_extension_target(argumentsDict)
     repoDirectory = CESIUM_NATIVE_DIR_EXT if isExt else CESIUM_NATIVE_DIR_MODULE
     repoDirectory = scons_to_abs_path(repoDirectory)
-    buildDirectory = get_native_build_dir()
     # Assume you already have the triplet (for now)
     triplet: str = determine_triplet()
     os.environ["VCPKG_TRIPLET"] = triplet
@@ -273,7 +263,7 @@ def configure_native(argumentsDict):
             "-DGIT_LFS_SKIP_SMUDGE=1",
             "-DVCPKG_TRIPLET=%s" % triplet,
             "-S", repoDirectory,
-            "-B", buildDirectory,
+            "-B", get_native_build_dir(),
         ] + ([f"-DCMAKE_OSX_ARCHITECTURES={get_macos_architecture()}"] if sys.platform == PLATFORM_MACOS else [])
     )
 
@@ -288,11 +278,11 @@ def configure_native(argumentsDict):
     print("Configuration completed without any errors!")
 
 
-def determine_triplet(arch=None):
+def determine_triplet():
     if os.name == OS_WIN:
         return "x64-windows-static"
     if sys.platform == PLATFORM_MACOS:
-        return {"x86_64": "x64-osx", "arm64": "arm64-osx"}[get_macos_architecture(arch)]
+        return {"x86_64": "x64-osx", "arm64": "arm64-osx"}[get_macos_architecture()]
     if os.name == OS_LINUX:
         return "x64-linux"
 
@@ -392,10 +382,10 @@ def install_additional_libs():
     vcpkgPath = find_ezvcpkg_path()
     execExtension = ".exe" if os.name == OS_WIN else ""
     executable = "%s/%s" % (vcpkgPath, "vcpkg" + execExtension)
-    subprocess.run([executable, "install", "uriparser:%s" % (determine_triplet())], check=True)
-    subprocess.run([executable, "install", "ada-url:%s" % (determine_triplet())], check=True)
+    subprocess.run([executable, "install", "uriparser:%s" % (determine_triplet())])
+    subprocess.run([executable, "install", "ada-url:%s" % (determine_triplet())])
     if os.name == OS_WIN:
-        subprocess.run([executable, "install", "curl:%s" % (determine_triplet())], check=True)
+        subprocess.run([executable, "install", "curl:%s" % (determine_triplet())])
 
 
 def find_ms_build() -> str:
