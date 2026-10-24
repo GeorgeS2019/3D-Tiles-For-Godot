@@ -279,25 +279,36 @@ def determine_triplet():
 
 
 def compile_native(argumentsDict):
+    # Determine the expected path of a core library to check if it's already built
+    isExt = is_extension_target(argumentsDict)
+    nativeDir = CESIUM_NATIVE_DIR_EXT if isExt else CESIUM_NATIVE_DIR_MODULE
+    absNativeDir = scons_to_abs_path(nativeDir)
+    
+    # Path to check for a built library (e.g., Cesium3DTilesSelection.lib on Windows)
+    lib_filename = "Cesium3DTilesSelection.lib" if os.name == OS_WIN else "libCesium3DTilesSelection.a"
+    expected_lib_path = os.path.join(absNativeDir, "Cesium3DTilesSelection", RELEASE_CONFIG, lib_filename)
+    
+    # Check if user explicitly forced it via command line: buildCesium=yes or buildCesium=no
     shouldBuildArg = argumentsDict.get("buildCesium", None)
-    if shouldBuildArg is None:
-        shouldBuildResponse = input(
-            "Do you wanna build Cesium Native (Choose yes if it's the first install)? [y/n]"
-        )
-        shouldBuildArg = shouldBuildResponse.capitalize()[0] == "Y"
+    
+    if shouldBuildArg is not None:
+        shouldBuild = str(shouldBuildArg).upper() in ["YES", "TRUE", "Y", "1"]
     else:
-        shouldBuildArg = (
-            shouldBuildArg.upper() == "YES" or shouldBuildArg.upper() == "TRUE"
-        )
+        # Automatic detection: if the library file doesn't exist, build it automatically!
+        if not os.path.exists(expected_lib_path):
+            print(f"[CESIUM] - '{lib_filename}' not found. Automatically triggering cesium-native build...")
+            shouldBuild = True
+        else:
+            print(f"[CESIUM] - Found existing cesium-native binaries at {expected_lib_path}. Skipping native build.")
+            shouldBuild = False
 
-    if not shouldBuildArg:
+    if not shouldBuild:
         return
 
     print("Building Cesium Native, this might take a few minutes...")
     configure_native(argumentsDict)
     print("Compiling Cesium Native...")
 
-    # TODO: Test if we can just do cmake --build for all platforms
     result = None
     if os.name == OS_WIN:
         result = build_native_win()
@@ -306,15 +317,16 @@ def compile_native(argumentsDict):
     elif os.name == OS_LINUX:
         result = build_native_linux()
     else:
-        print(
-            "Compiling for platform %s is not yet supported!" % os.name, file=sys.stderr
-        )
+        print("Compiling for platform %s is not yet supported!" % os.name, file=sys.stderr)
+        return
+
     if result.returncode != 0:
         print("Error building Cesium Native: %s" % str(result.stderr))
+        exit(1)
+        
     print("Cleaning definitions on generated files...")
     clean_cesium_definitions()
     print("Finished building Cesium Native!")
-
 
 def build_native_linux():
     return subprocess.run(["cmake", "--build", "."])
