@@ -9,14 +9,14 @@
 void GeoreferencedMesh::_ready() {
 	if (Engine::get_singleton()->is_editor_hint()) return;
 
+	const CesiumGeoreference* georeference = this->get_georeference();
 	// True origin is a no-op
-	if (this->get_georeference()->get_origin_type_raw() == CesiumGeoreference::OriginType::TrueOrigin) {
+	if (georeference->get_origin_type_raw() == CesiumGeoreference::OriginType::TrueOrigin) {
 		return;
 	}
-	// Use the georeference's origin to apply the difference in engine coords
-	Vector3 ecefOrigin = CesiumMathUtils::from_glm_vec3(this->get_georeference()->get_ecef_position());
-	Vector3 objectPos = this->get_georeference()->get_tx_engine_to_ecef().xform(this->get_global_position());
-	this->set_ecef_position(objectPos + ecefOrigin);
+	// The node was placed relative to the georeference's origin, so its ECEF position is the origin plus its offset
+	const glm::dvec3 ecefOffset = georeference->unshifted_engine_to_ecef(CesiumMathUtils::to_glm_dvec3(this->get_global_position()));
+	this->set_ecef_position_precise(georeference->get_ecef_position() + ecefOffset);
 }
 
 void GeoreferencedMesh::apply_position_on_globe(const glm::dvec3& engineOrigin) {
@@ -35,23 +35,22 @@ void GeoreferencedMesh::set_original_position(const glm::dvec3& position) {
 void GeoreferencedMesh::set_engine_position(const Vector3& position) {
 	const CesiumGeoreference* georef = this->m_tileset->get_georeference_node();
 	this->m_originalPosition = CesiumMathUtils::to_glm_dvec3(position);
-	glm::dvec3 engineOrigin = CesiumMathUtils::ecef_to_engine(georef->get_ecef_position());
-	this->apply_position_on_globe(engineOrigin);
+	this->apply_position_on_globe(georef->get_unshifted_engine_origin());
 }
 
 void GeoreferencedMesh::set_ecef_position(const Vector3& position) {
+	this->set_ecef_position_precise(CesiumMathUtils::to_glm_dvec3(position));
+}
+
+void GeoreferencedMesh::set_ecef_position_precise(const glm::dvec3& position) {
 	const CesiumGeoreference* georef = this->m_tileset->get_georeference_node();
-	Vector3 enginePos = georef->get_tx_ecef_to_engine().xform(position);
-	
-	this->m_originalPosition = CesiumMathUtils::to_glm_dvec3(enginePos);
-	glm::dvec3 engineOrigin = CesiumMathUtils::ecef_to_engine(georef->get_ecef_position());
-	this->apply_position_on_globe(engineOrigin);
+	this->m_originalPosition = georef->ecef_to_unshifted_engine(position);
+	this->apply_position_on_globe(georef->get_unshifted_engine_origin());
 }
 
 
 Vector3 GeoreferencedMesh::get_ecef_position() const {
-	Vector3 originalPos = CesiumMathUtils::from_glm_vec3(this->m_originalPosition);
-	return this->m_tileset->get_georeference_node()->get_tx_engine_to_ecef().xform(originalPos);
+	return CesiumMathUtils::from_glm_vec3(this->m_tileset->get_georeference_node()->unshifted_engine_to_ecef(this->m_originalPosition));
 }
 
 void GeoreferencedMesh::set_tileset(Cesium3DTileset* tileset) {

@@ -106,7 +106,6 @@ inline void extract_properties_from_bounding_box(const CesiumGeometry::OrientedB
 	const Transform3D& ecefToEngineXform = georeference->get_tx_ecef_to_engine();
 
 	Vector3 size = CesiumMathUtils::from_glm_vec3(box.getLengths());
-	Vector3 center = CesiumMathUtils::from_glm_vec3(box.getCenter());
 	const glm::mat3& halfAxes = box.getHalfAxes();
 
 	const glm::dvec3& basisX = halfAxes[0];
@@ -118,13 +117,8 @@ inline void extract_properties_from_bounding_box(const CesiumGeometry::OrientedB
 		CesiumMathUtils::from_glm_vec3(basisZ)
 	).orthonormalized();
 
-	Transform3D xform = ecefToEngineXform * Transform3D(basisLocal, center);
-
-	// Check if we are georeferenced with cartographic origin and substract the origin if so
-	if (georeference->get_origin_type() == static_cast<int32_t>(CesiumGeoreference::OriginType::CartographicOrigin)) {
-		const Vector3 relativeOrigin = ecefToEngineXform.xform(CesiumMathUtils::from_glm_vec3(georeference->get_ecef_position()));
-		xform.set_origin(xform.get_origin() - relativeOrigin);
-	}
+	// Relative to the origin in CartographicOrigin mode
+	Transform3D xform = Transform3D(ecefToEngineXform.basis * basisLocal, georeference->ecef_to_engine_position(box.getCenter()));
 
 	if( !refProperties->has("size") ) {
 		(*refProperties)["size"] = size;
@@ -140,18 +134,12 @@ inline void draw_debug_volume_from_variant(const Cesium3DTilesSelection::Boundin
 	EBoundingType boundingType = static_cast<EBoundingType>(typeIndex + 1);
 	Dictionary properties{};
 
-	// Extract our rotation here
-	const Transform3D& ecefToEngineXform = georeference->get_tx_ecef_to_engine();
-
 	switch (boundingType) {
         case EBoundingType::Sphere:
         	{
 	    		const auto& sphere = std::get<CesiumGeometry::BoundingSphere>(boundingVariant);
-				Vector3 center = ecefToEngineXform.xform(CesiumMathUtils::from_glm_vec3(sphere.getCenter()));
-				if (georeference->get_origin_type() == static_cast<int32_t>(CesiumGeoreference::OriginType::CartographicOrigin)) {
-					const Vector3 relativeOrigin = ecefToEngineXform.xform(CesiumMathUtils::from_glm_vec3(georeference->get_ecef_position()));
-					center -= relativeOrigin;
-				}
+				// Relative to the origin in CartographicOrigin mode
+				Vector3 center = georeference->ecef_to_engine_position(sphere.getCenter());
 				if( !properties.has("center") ){
 					properties["center"] = center;
 				}
@@ -172,6 +160,7 @@ inline void draw_debug_volume_from_variant(const Cesium3DTilesSelection::Boundin
         		const CesiumGeometry::OrientedBoundingBox& box = boundingRegionLoose.getBoundingRegion().getBoundingBox();
         		extract_properties_from_bounding_box(box, &properties, georeference);
         	}
+			break;
         case EBoundingType::Region:
 	        	{
 		        	const auto& region = std::get<CesiumGeospatial::BoundingRegion>(boundingVariant);
@@ -363,7 +352,8 @@ void Cesium3DTileset::update_tileset(const Transform3D& cameraTransform)
 
 	glm::dvec3 camPos;
 	if (isGeoreferenced) {
-		camPos = this->m_georeference->get_ecef_position();
+		// The camera transform is in ECEF axes relative to the engine origin, which sits at the georeference
+		camPos = this->m_georeference->get_ecef_position() + CesiumMathUtils::to_glm_dvec3(cameraTransform.origin);
 	}
 	else {
 		camPos = CesiumMathUtils::to_glm_dvec3(cameraTransform.origin);
@@ -637,9 +627,9 @@ void Cesium3DTileset::register_tile(Cesium3DTile *instance, size_t hash) {
 	if (this->m_georeference->get_origin_type_raw() == CesiumGeoreference::OriginType::TrueOrigin) {
 		return;
 	}
-	const glm::dvec3& ecefOrigin = this->m_georeference->get_ecef_position();
-	const glm::dvec3 engineOrigin = CesiumMathUtils::ecef_to_engine(ecefOrigin);
-	instance->apply_position_on_globe(engineOrigin);
+	// Global, so the tileset node's own rotation never tilts the tile
+	instance->set_global_transform(Transform3D(instance->get_engine_basis(), instance->get_global_position()));
+	instance->apply_position_on_globe(this->m_georeference->get_unshifted_engine_origin());
 }
 
 
@@ -812,7 +802,9 @@ void Cesium3DTileset::_enter_tree() {
 	//Parent to the globe
 	this->m_georeference = globe;
 	this->reparent(globe, true);
-	this->set_rotation_degrees(Vector3(90.0, 0.0, 0.0));
+	// Cancel the TrueOrigin globe's Earth-axis rotation; a CartographicOrigin globe is already level
+	const bool isTrueOrigin = globe->get_origin_type_raw() == CesiumGeoreference::OriginType::TrueOrigin;
+	this->set_rotation_degrees(isTrueOrigin ? Vector3(90.0, 0.0, 0.0) : Vector3());
 	this->set_owner(globe->get_parent_node_3d());
 }
 

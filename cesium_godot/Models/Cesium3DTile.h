@@ -36,6 +36,11 @@ public:
 	int32_t get_table_count() const;
 
 	const Dictionary& get_structural_metadata() const;
+
+	/// @brief Intended to be used by C++ only: the tile's global rotation and scale in CartographicOrigin mode
+	void set_engine_basis(const Basis& basis);
+
+	const Basis& get_engine_basis() const;
 	
 private:
 
@@ -44,6 +49,8 @@ private:
 	Node* create_collision_node_custom_trimesh();
 
 	TileMetadata m_metadata;
+
+	Basis m_engineBasis;
 	
 	glm::dvec3 m_originalPosition;
 

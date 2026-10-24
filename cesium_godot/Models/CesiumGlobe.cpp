@@ -30,22 +30,72 @@ constexpr double WGS84_E_SQR = (WGS84_R_SQR - WGS84_BSQR) / WGS84_R_SQR;
 
 Transform3D CesiumGeoreference::get_tx_engine_to_ecef() const
 {
-	return this->get_global_transform().inverse();
+	return this->get_tx_ecef_to_engine().inverse();
 }
 
 Transform3D CesiumGeoreference::get_tx_ecef_to_engine() const
 {
-	return this->get_global_transform();
+	if (this->m_originType == OriginType::TrueOrigin) {
+		return this->get_global_transform();
+	}
+	// No translation: callers rotate directions and ECEF offsets with it
+	return Transform3D(CesiumMathUtils::to_godot_basis(this->get_ecef_to_engine_rotation()), Vector3());
 }
 
 Transform3D CesiumGeoreference::get_initial_tx_ecef_to_engine() const
 {
-	return this->m_initialOriginTransform;
+	if (this->m_originType == OriginType::TrueOrigin) {
+		return this->m_initialOriginTransform;
+	}
+	// The local ground frame is anchored, so the initial and current frames are the same
+	return this->get_tx_ecef_to_engine();
 }
 
 Transform3D CesiumGeoreference::get_initial_tx_engine_to_ecef() const
 {
-	return this->m_initialOriginTransform.inverse();
+	return this->get_initial_tx_ecef_to_engine().inverse();
+}
+
+glm::dmat3 CesiumGeoreference::get_ecef_to_engine_rotation() const
+{
+	if (this->m_originType == OriginType::TrueOrigin) {
+		return CesiumMathUtils::true_origin_ecef_to_engine_rotation();
+	}
+	if (this->m_anchoredLocalGroundRotation.has_value()) {
+		return *this->m_anchoredLocalGroundRotation;
+	}
+	return CesiumMathUtils::local_ground_ecef_to_engine_rotation(this->m_ecefPosition);
+}
+
+glm::dvec3 CesiumGeoreference::ecef_to_unshifted_engine(const glm::dvec3& ecef) const
+{
+	if (this->m_originType == OriginType::TrueOrigin) {
+		return CesiumMathUtils::to_glm_dvec3(this->get_tx_ecef_to_engine().xform(CesiumMathUtils::from_glm_vec3(ecef)));
+	}
+	return this->get_ecef_to_engine_rotation() * ecef;
+}
+
+glm::dvec3 CesiumGeoreference::unshifted_engine_to_ecef(const glm::dvec3& unshiftedEngine) const
+{
+	if (this->m_originType == OriginType::TrueOrigin) {
+		return CesiumMathUtils::to_glm_dvec3(this->get_tx_engine_to_ecef().xform(CesiumMathUtils::from_glm_vec3(unshiftedEngine)));
+	}
+	// A rotation's inverse is its transpose
+	return glm::transpose(this->get_ecef_to_engine_rotation()) * unshiftedEngine;
+}
+
+glm::dvec3 CesiumGeoreference::get_unshifted_engine_origin() const
+{
+	return this->get_ecef_to_engine_rotation() * this->m_ecefPosition;
+}
+
+Vector3 CesiumGeoreference::ecef_to_engine_position(const glm::dvec3& ecef) const
+{
+	if (this->m_originType == OriginType::TrueOrigin) {
+		return this->get_tx_ecef_to_engine().xform(CesiumMathUtils::from_glm_vec3(ecef));
+	}
+	// Subtract in double precision before narrowing, so nearby positions keep their detail
+	return CesiumMathUtils::from_glm_vec3(this->get_ecef_to_engine_rotation() * (ecef - this->m_ecefPosition));
 }
 
 Vector3 CesiumGeoreference::get_global_surface_position(const Vector3& cameraPos, const Vector3& cameraDirection)
@@ -290,8 +340,7 @@ void CesiumGeoreference::update_ecef_with_lla(glm::dvec3 lla) {
 void CesiumGeoreference::move_origin(glm::dvec3 previousPosition)
 {
 	// Move all the tilesets
-	// const glm::dvec3 prevEnginePos = CesiumMathUtils::ecef_to_engine(previousPosition);
-	const glm::dvec3 currEnginePos = CesiumMathUtils::ecef_to_engine(this->m_ecefPosition);
+	const glm::dvec3 currEnginePos = this->get_unshifted_engine_origin();
 	for (Cesium3DTileset* tileset : this->m_trackedTilesets) {
 		// Now we can recalculate the same positions
 		tileset->move_origin(currEnginePos);
@@ -416,7 +465,17 @@ void CesiumGeoreference::_bind_methods()
 
 void CesiumGeoreference::_enter_tree() {
 	this->m_initialOriginTransform = this->get_global_transform();
-	this->set_rotation_degrees(Vector3(-90.0, 0.0, 0.0));
 	this->m_originalEcefPosition = this->m_ecefPosition;
+	if (this->m_originType == OriginType::TrueOrigin) {
+		// The node itself is the ECEF to engine transform
+		this->set_rotation_degrees(Vector3(-90.0, 0.0, 0.0));
+		return;
+	}
+	// Anchor once: tiles keep their positions in this frame, so re-entering the tree must not change it
+	if (!this->m_anchoredLocalGroundRotation.has_value()) {
+		this->m_anchoredLocalGroundRotation = CesiumMathUtils::local_ground_ecef_to_engine_rotation(this->m_ecefPosition);
+	}
+	// Tiles are placed with global transforms; leaving the node unrotated keeps its children in the level engine frame
+	this->set_rotation_degrees(Vector3());
 }
 	

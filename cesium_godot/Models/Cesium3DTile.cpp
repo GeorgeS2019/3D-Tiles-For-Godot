@@ -105,6 +105,14 @@ const Dictionary& Cesium3DTile::get_structural_metadata() const {
 	return this->m_metadata.get_table(0);
 }
 
+void Cesium3DTile::set_engine_basis(const Basis& basis) {
+	this->m_engineBasis = basis;
+}
+
+const Basis& Cesium3DTile::get_engine_basis() const {
+	return this->m_engineBasis;
+}
+
 void Cesium3DTile::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_metadata_table", "index"), &Cesium3DTile::get_metadata_table);
     ClassDB::bind_method(D_METHOD("get_table_count"), &Cesium3DTile::get_table_count);

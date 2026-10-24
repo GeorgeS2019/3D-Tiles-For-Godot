@@ -3,6 +3,7 @@
 
 #include "Models/CesiumGDTileset.h"
 #include "godot_cpp/variant/vector3.hpp"
+#include <optional>
 #include <vector>
 #if defined(CESIUM_GD_EXT)
 #include <godot_cpp/classes/object.hpp>
@@ -14,6 +15,7 @@ using namespace godot;
 #endif
 
 #include <glm/ext/vector_double3.hpp>
+#include <glm/mat3x3.hpp>
 
 /// @brief small typedef for clarity
 using EcefVector3 = Vector3;
@@ -28,6 +30,8 @@ public:
 		TrueOrigin
 	};
 
+	/// @brief In CartographicOrigin mode, this and get_tx_ecef_to_engine are the local ground frame (see
+	/// get_ecef_to_engine_rotation) with no translation. In TrueOrigin mode they are this node's global transform
 	Transform3D get_tx_engine_to_ecef() const;
 
 	Transform3D get_tx_ecef_to_engine() const;
@@ -35,6 +39,28 @@ public:
 	Transform3D get_initial_tx_ecef_to_engine() const;
 
 	Transform3D get_initial_tx_engine_to_ecef() const;
+
+	/// @brief Rotation from ECEF axes to engine axes, in double precision.
+	/// CartographicOrigin: the local ground frame at the georeference, so the ground is level in the engine:
+	/// up (the ellipsoid normal) = +Y, east = +X, north = -Z. The frame is anchored where the georeference first
+	/// enters the tree and stays fixed while the origin moves, so tiles only ever need translating. Far from the
+	/// anchor the ground slowly tilts (about one degree per 111 km). Before entering the tree it follows the origin.
+	/// TrueOrigin: the Earth's axis (ECEF +Z) is engine +Y
+	glm::dmat3 get_ecef_to_engine_rotation() const;
+
+	/// @brief An ECEF position in engine axes before the origin is subtracted
+	/// (the space GeoreferencedMesh keeps its original position in)
+	glm::dvec3 ecef_to_unshifted_engine(const glm::dvec3& ecef) const;
+
+	/// @brief Inverse of ecef_to_unshifted_engine
+	glm::dvec3 unshifted_engine_to_ecef(const glm::dvec3& unshiftedEngine) const;
+
+	/// @brief The georeference's ECEF position in unshifted engine space; subtracting it from an unshifted
+	/// position gives the position in the scene
+	glm::dvec3 get_unshifted_engine_origin() const;
+
+	/// @brief Where an ECEF position is in the scene right now (relative to the origin in CartographicOrigin mode)
+	Vector3 ecef_to_engine_position(const glm::dvec3& ecef) const;
 
 	Vector3 get_global_surface_position(const Vector3& cameraPos, const Vector3& cameraDirection);
 
@@ -112,6 +138,9 @@ private:
 	EcefVector3 trace_ray_to_ellipsoid(const EcefVector3& origin, const EcefVector3& rayDirection) const;
 
 	Transform3D m_initialOriginTransform{};
+
+	/// @brief The CartographicOrigin frame, captured the first time the georeference enters the tree
+	std::optional<glm::dmat3> m_anchoredLocalGroundRotation;
 	
 	glm::dvec3 m_ecefPosition{ -1292940.0, -4740030.0, 4056960.0 };
 	

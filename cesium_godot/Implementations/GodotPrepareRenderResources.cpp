@@ -162,9 +162,26 @@ void* GodotPrepareRenderResources::prepareInMainThread(Tile& tile, void* pLoadTh
 	glm::dmat4 tileTransform = tile.getTransform();
 	tileTransform = CesiumGDModelLoader::apply_rtc_center(model, tileTransform);
 	tileTransform = CesiumGDModelLoader::apply_gltf_up_axis_transform(model, tileTransform);
-	// Then apply the z up
-	glm::dvec3 position = glm::dvec3(CesiumMathUtils::ecef_to_engine(tileTransform[3]));
-	instance->set_original_position(instance->get_original_position() + position);
+
+	CesiumGeoreference* georeference = nullptr;
+	const bool isCartographicOrigin = this->m_tileset->is_georeferenced(&georeference);
+	ERR_FAIL_NULL_V_MSG(georeference, pLoadThreadResult, "A Cesium3DTileset must be a child of a CesiumGeoreference to place its tiles");
+	const glm::dmat3 ecefToEngine = georeference->get_ecef_to_engine_rotation();
+
+	if (!isCartographicOrigin) {
+		// TrueOrigin keeps its original placement: only the tile's ECEF translation, rotated so Earth's axis is up
+		const glm::dvec3 position = ecefToEngine * glm::dvec3(tileTransform[3]);
+		instance->set_original_position(instance->get_original_position() + position);
+		return pLoadThreadResult;
+	}
+
+	// The mesh vertices are in the root glTF node's space, so compose the whole chain:
+	// engine (local ground frame) <- ECEF <- tile (with RTC center and glTF up axis) <- root node
+	const glm::dmat4 nodeTransform = CesiumMathUtils::array_to_dmat4(model.nodes.at(0).matrix);
+	const glm::dmat4 ecefTransform = tileTransform * nodeTransform;
+	const double scaleFactor = georeference->get_scale_factor();
+	instance->set_original_position(ecefToEngine * glm::dvec3(ecefTransform[3]));
+	instance->set_engine_basis(CesiumMathUtils::to_godot_basis(ecefToEngine * glm::dmat3(ecefTransform) * scaleFactor));
 	return pLoadThreadResult;
 }
 

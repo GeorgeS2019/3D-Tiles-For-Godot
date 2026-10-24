@@ -5,6 +5,9 @@
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/ext/vector_double3.hpp"
 #include "glm/trigonometric.hpp"
+#include "glm/matrix.hpp"
+#include "CesiumGeospatial/GlobeTransforms.h"
+#include "godot_cpp/variant/basis.hpp"
 #include "godot_cpp/core/error_macros.hpp"
 #include "godot_cpp/variant/string.hpp"
 #include "godot_cpp/variant/transform3d.hpp"
@@ -142,23 +145,40 @@ public:
 	    return t;
 	}
 	
-	static inline glm::dvec3 ecef_to_engine(const glm::dvec3& vec) {
-		constexpr glm::dmat4 identity = glm::dmat4(1.0); 
-		constexpr glm::dmat4 translation = glm::translate(identity, glm::dvec3(0.0)); 
-		constexpr double angleX = glm::radians(-90.0);
-		glm::dmat4 rotation = glm::rotate(identity, angleX, glm::dvec3(1.0, 0.0, 0.0));
-		glm::dmat4 scale = glm::scale(identity, glm::dvec3(1.0));
-		glm::dmat4 trs = translation * rotation * scale;
-
-		return trs * glm::dvec4(vec, 1.0);
+	/// @brief ECEF to engine rotation for TrueOrigin mode: the Earth's axis (ECEF +Z) becomes engine +Y,
+	/// so ECEF (x, y, z) maps to engine (x, z, -y)
+	static inline glm::dmat3 true_origin_ecef_to_engine_rotation() {
+		constexpr double earthAxisToEngineUpDegrees = -90.0;
+		const glm::dvec3 engineXAxis(1.0, 0.0, 0.0);
+		return glm::dmat3(glm::rotate(glm::dmat4(1.0), glm::radians(earthAxisToEngineUpDegrees), engineXAxis));
 	}
-	
-	static inline glm::dmat4 array_to_dmat4(const std::vector<double>& vec) {
-		if (vec.size() != 16) {
-			ERR_PRINT("Array must have exactly 16 elements to convert it to a matrix, # of elements found : " + itos(vec.size()));
-		}
 
-		glm::mat4 mat;
+	/// @brief ECEF to engine rotation that lays the ground flat at a place on the globe:
+	/// the ellipsoid normal at ecefOrigin becomes engine +Y, east becomes +X and north becomes -Z.
+	/// Uses Cesium's east-north-up frame, which also defines east and north at the poles and the Earth's center
+	static inline glm::dmat3 local_ground_ecef_to_engine_rotation(const glm::dvec3& ecefOrigin) {
+		const glm::dmat3 eastNorthUpToEcef = glm::dmat3(CesiumGeospatial::GlobeTransforms::eastNorthUpToFixedFrame(ecefOrigin));
+		const glm::dvec3& east = eastNorthUpToEcef[0];
+		const glm::dvec3& north = eastNorthUpToEcef[1];
+		const glm::dvec3& up = eastNorthUpToEcef[2];
+		// Columns are the engine X, Y and Z axes expressed in ECEF
+		const glm::dmat3 engineToEcef(east, up, -north);
+		// A rotation's inverse is its transpose
+		return glm::transpose(engineToEcef);
+	}
+
+	/// @brief Converts a glm matrix to a Godot basis column by column (Godot's Basis constructor takes columns)
+	static inline Basis to_godot_basis(const glm::dmat3& matrix) {
+		return Basis(from_glm_vec3(matrix[0]), from_glm_vec3(matrix[1]), from_glm_vec3(matrix[2]));
+	}
+
+	static inline glm::dmat4 array_to_dmat4(const std::vector<double>& vec) {
+		constexpr size_t matrixElementCount = 16;
+		// Reading past a shorter array would be undefined behaviour, so stop here
+		ERR_FAIL_COND_V_MSG(vec.size() != matrixElementCount, glm::dmat4(1.0), "Array must have exactly 16 elements to convert it to a matrix, # of elements found : " + itos(vec.size()));
+
+		// Double precision, since glTF node matrices can hold Earth-sized translations
+		glm::dmat4 mat(1.0);
 		for (int32_t i = 0; i < 4; ++i) {
 			for (int32_t j = 0; j < 4; ++j) {
 				mat[i][j] = vec[i * 4 + j];

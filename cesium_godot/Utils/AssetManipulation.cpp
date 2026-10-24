@@ -39,7 +39,7 @@ CesiumGeoreference* Godot3DTiles::AssetManipulation::find_or_create_globe(Node* 
 	//Create a globe
 	globe = memnew(CesiumGeoreference);
 	globe->set_name(CESIUM_GLOBE_NAME);
-	globe->set_rotation_degrees(Vector3(-90.0, 0.0, 0.0));
+	// No rotation here: the georeference sets its own rotation for its origin type when it enters the tree
 	root->add_child(globe, true);
 	globe->set_owner(root);
 	return globe;

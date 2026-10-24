@@ -34,6 +34,9 @@ public:
 	/// @brief Intended to be used by GDScript only
 	void set_ecef_position(const Vector3& position);
 
+	/// @brief Intended to be used by C++ only, keeps the full precision of the ECEF position
+	void set_ecef_position_precise(const glm::dvec3& position);
+
 	Vector3 get_ecef_position() const;
 	
 	Vector3 get_engine_position() const;
