@@ -25,6 +25,8 @@ OS_WIN = "nt"
 
 OS_LINUX = "posix"
 
+PLATFORM_MACOS = "darwin"
+
 # sys.platform value for macOS (os.name returns 'posix' for both Linux and macOS)
 PLATFORM_MACOS = "darwin"
 
