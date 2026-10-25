@@ -279,54 +279,44 @@ def determine_triplet():
 
 
 def compile_native(argumentsDict):
-    # Determine the expected path of a core library to check if it's already built
-    isExt = is_extension_target(argumentsDict)
-    nativeDir = CESIUM_NATIVE_DIR_EXT if isExt else CESIUM_NATIVE_DIR_MODULE
-    absNativeDir = scons_to_abs_path(nativeDir)
-    
-    # Path to check for a built library (e.g., Cesium3DTilesSelection.lib on Windows)
-    lib_filename = "Cesium3DTilesSelection.lib" if os.name == OS_WIN else "libCesium3DTilesSelection.a"
-    expected_lib_path = os.path.join(absNativeDir, "Cesium3DTilesSelection", RELEASE_CONFIG, lib_filename)
-    
-    # Check if user explicitly forced it via command line: buildCesium=yes or buildCesium=no
     shouldBuildArg = argumentsDict.get("buildCesium", None)
-    
-    if shouldBuildArg is not None:
-        shouldBuild = str(shouldBuildArg).upper() in ["YES", "TRUE", "Y", "1"]
+    if shouldBuildArg is None:
+        shouldBuildResponse = input(
+            "Do you wanna build Cesium Native (Choose yes if it's the first install)? [y/n]"
+        )
+        shouldBuildArg = shouldBuildResponse.capitalize()[0] == "Y"
     else:
-        # Automatic detection: if the library file doesn't exist, build it automatically!
-        if not os.path.exists(expected_lib_path):
-            print(f"[CESIUM] - '{lib_filename}' not found. Automatically triggering cesium-native build...")
-            shouldBuild = True
-        else:
-            print(f"[CESIUM] - Found existing cesium-native binaries at {expected_lib_path}. Skipping native build.")
-            shouldBuild = False
+        shouldBuildArg = (
+            shouldBuildArg.upper() == "YES" or shouldBuildArg.upper() == "TRUE"
+        )
 
-    if not shouldBuild:
+    if not shouldBuildArg:
         return
 
     print("Building Cesium Native, this might take a few minutes...")
     configure_native(argumentsDict)
+    nativeBuildDirectory = os.getcwd()
     print("Compiling Cesium Native...")
 
+    # TODO: Test if we can just do cmake --build for all platforms
     result = None
     if os.name == OS_WIN:
-        result = build_native_win()
+        result = build_native_win(nativeBuildDirectory)
     elif sys.platform == PLATFORM_MACOS:
         result = build_native_macos()
     elif os.name == OS_LINUX:
         result = build_native_linux()
     else:
-        print("Compiling for platform %s is not yet supported!" % os.name, file=sys.stderr)
-        return
-
+        print(
+            "Compiling for platform %s is not yet supported!" % os.name, file=sys.stderr
+        )
     if result.returncode != 0:
         print("Error building Cesium Native: %s" % str(result.stderr))
         exit(1)
-        
     print("Cleaning definitions on generated files...")
     clean_cesium_definitions()
     print("Finished building Cesium Native!")
+
 
 def build_native_linux():
     return subprocess.run(["cmake", "--build", "."])
@@ -336,19 +326,9 @@ def build_native_macos():
     return subprocess.run(["cmake", "--build", "."])
 
 
-def build_native_win():
-    # execute MSBuild
+def build_native_win(buildDirectory: str):
     buildConfig: str = RELEASE_CONFIG
-    solutionName: str = "cesium-native.sln"
-    msbuildPath: str = find_ms_build()
-    if msbuildPath == "":
-        print(
-            "Could not find MSBuild.exe, make sure to have Visual Studio installed",
-            file=sys.stderr,
-        )
-        return
-    releaseConfig = "/property:Configuration=%s" % buildConfig
-    return subprocess.run([msbuildPath, solutionName, releaseConfig])
+    return subprocess.run(["cmake", "--build", buildDirectory, "--config", buildConfig])
 
 
 def clean_cesium_definitions():
