@@ -1,4 +1,4 @@
-﻿# SCub for building the Godot Cesium submodule
+# SCub for building the Godot Cesium submodule
 import CesiumBuildUtils as cesium_build_utils
 import os
 import sys
@@ -235,7 +235,16 @@ if (os.name == cesium_build_utils.OS_WIN):
         "absl_vlog_config_internal",
         "zlib",
         "zlibstatic-ng",
-        "libmodpbase64"
+        "libmodpbase64",
+        # Windows system libraries required by the static libcurl
+        "iphlpapi",   # if_nametoindex
+        "secur32",    # InitSecurityInterfaceW (SSPI)
+        "ws2_32",
+        "crypt32",
+        "wldap32",
+        "bcrypt",
+        "normaliz",
+        "advapi32"
     ])
 elif sys.platform == cesium_build_utils.PLATFORM_MACOS:
     # Remove litehtml and gumbo from the libraries list - we'll use -force_load instead
