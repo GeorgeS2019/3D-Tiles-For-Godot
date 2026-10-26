@@ -43,6 +43,15 @@ env.__class__.add_source_files = add_source_files
 # Append include paths
 env.Append(CPPPATH=["testSrc/", "cesium_godot/", "cesium_auxiliars/"])
 
+# Prefer locally staged SDK include/lib paths when present (for local Windows workflow)
+sdk_dir = os.path.join(os.getcwd(), "sdk")
+sdk_include_dir = os.path.join(sdk_dir, "include")
+sdk_lib_dir = os.path.join(sdk_dir, "lib")
+if os.path.isdir(sdk_include_dir):
+    env.Append(CPPPATH=[sdk_include_dir])
+if os.path.isdir(sdk_lib_dir):
+    env.Append(LIBPATH=[sdk_lib_dir])
+
 # Run the SCsub that is under cesium_godot/
 SConscript("cesium_godot/SCsub", exports="env")
 
